@@ -1,0 +1,105 @@
+package tester.api.mixi;
+
+import java.io.IOException;
+import java.net.HttpURLConnection;
+import java.util.HashMap;
+import java.net.URLEncoder;
+import java.util.logging.Logger;
+
+import javax.servlet.http.HttpServlet;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpSession;
+
+import tester.api.mixi.util.HttpUtils;
+
+import net.arnx.jsonic.JSON;
+// sesssion : http://www.atmarkit.co.jp/fjava/javafaq/session/session04.html
+//            http://jp.fujitsu.com/solutions/sdas/technology/web-apl/03-session.html
+public class OAuthMixiService extends HttpServlet {
+//    private static final String CLIENT_ID          = "9f038748c9a4b526f0fa";                     // local
+//    private static final String CLIENT_SECRET      = "e6aef695626ea330fbbe69022e941ddc741e3f3b"; // local
+//    private static final String REDIRECT_URL_MIXI  = "http://localhost:8888/callback.html";      // local
+    private static final String CLIENT_ID          = "ed8d00667cf3376db9dc";                     // gae
+    private static final String CLIENT_SECRET      = "8ecaa2cb92a62252137adffb9f424e9532ac5648"; // gae
+    private static final String REDIRECT_URL_MIXI  = "http://mixiapi-tester.appspot.com/callback.html"; // gae
+    private static final String TOKEN_URL_MIXI     = "https://secure.mixi-platform.com/2/token";
+    private final HttpUtils     httpUtils          = new HttpUtils();
+    private static final Logger log                = Logger.getLogger(OAuthMixiService.class.getName());
+
+    /**
+     * OAuth認証、あるいはrefresh_tokenによるaccess_tokenの再取得を実施。
+     * refreshを受け取る理由がよくわからん。
+     */
+    public void doPost(HttpServletRequest request, HttpServletResponse response )
+        throws IOException {
+        request.setCharacterEncoding( "UTF-8" );
+
+        try {
+            // get access token by using parameter "code" or "refresh_token"
+            String code     = request.getParameter( "code" );
+            // TODO : createUriParameter( HashMap<String, String> params ) として一般化しようか。
+            String postData = this.createPostData( code );
+
+            // http access
+            HttpURLConnection urlConnection;
+            String            returnedJson;
+            urlConnection = this.httpUtils.getUrlConnection( "POST", OAuthMixiService.TOKEN_URL_MIXI, null );
+            urlConnection = this.httpUtils.postData(urlConnection, postData);
+            returnedJson  = this.httpUtils.getReturnedValue(urlConnection);
+            urlConnection.disconnect();
+
+            // decode json to HashMap and store the object in session
+            HashMap     jsonObj;
+            HttpSession session;
+            jsonObj = JSON.decode( returnedJson );
+            session = request.getSession( true );
+            if ( null != jsonObj.get("error") ) {
+                session.invalidate();
+            }
+            session.setAttribute("ACCESS_TOKENS", jsonObj);
+            session.setMaxInactiveInterval(3600 * 24);
+
+            // respond to client
+            //String access_token  = null;
+            String access_token  = (String)jsonObj.get( "access_token" );
+            if ( null != access_token ) {
+                response.setStatus( HttpServletResponse.SC_OK); // 200
+            }
+            else {
+                OAuthMixiService.log.severe("Cannot get access token from session\n");
+                session.invalidate();
+                response.sendError(HttpServletResponse.SC_UNAUTHORIZED);
+            }
+        }
+        catch ( Exception e ) {
+            OAuthMixiService.log.severe("Failed complete oauth\n");
+            OAuthMixiService.log.severe(e.getMessage());
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+        }
+    }
+    /**
+     * create request parameters for oauth or refresh_token.
+     * @param mode
+     * @param code
+     * @return
+     */
+    private String createPostData ( String code ) {
+        try {
+            String postData
+                = "client_id="
+                + OAuthMixiService.CLIENT_ID
+                + "&client_secret="
+                + OAuthMixiService.CLIENT_SECRET
+                + "&grant_type=authorization_code"
+                + "&code=" + code
+                + "&redirect_uri=" + URLEncoder.encode( OAuthMixiService.REDIRECT_URL_MIXI, "UTF-8" )
+                ;
+            return postData;
+        }
+        catch ( Exception e ) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+}
